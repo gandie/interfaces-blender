@@ -3,7 +3,8 @@ from bpy_extras.io_utils import ImportHelper
 
 import json
 
-def read_json_data(context, filepath, data_array_name, data_fields, encoding='utf-8-sig'):
+def read_json_data(context, filepath, data_fields, data_array_name=None,
+                   encoding='utf-8-sig', joint_names=None):
     '''
     # https://docs.blender.org/api/current/bpy.types.Attribute.html#bpy.types.Attribute
     '''
@@ -14,9 +15,13 @@ def read_json_data(context, filepath, data_array_name, data_fields, encoding='ut
 
     f = open(filepath, 'r', encoding=encoding)
     data = json.load(f)
-    
-    data_array = data[data_array_name] 
-    
+
+    if data_array_name:
+        data_array = data[data_array_name] 
+    else:
+        assert isinstance(data, list), 'JSON list expected'
+        data_array = data
+
     # name of the object and mesh
     data_name = "imported_data"
     
@@ -31,6 +36,10 @@ def read_json_data(context, filepath, data_array_name, data_fields, encoding='ut
     for index, frame in enumerate(data_array):
 
         for joint in frame:
+
+            if joint_names:
+                if joint['name'] not in joint_names:
+                    continue
 
             # make sure it's the right data type
             for data_field in data_fields:
@@ -74,17 +83,6 @@ def read_json_data(context, filepath, data_array_name, data_fields, encoding='ut
     return report_message, report_type
 
 
-def add_data_fields(mesh, data_fields):
-    '''
-    add custom data to mesh from data_fields
-    '''
-    for data_field in data_fields:
-        mesh.attributes.new(
-            name=data_field.name if data_field.name else "empty_key_string",
-            type=data_field.dataType,
-            domain='POINT'
-        )
-
 def create_object(mesh, name):
     for ob in bpy.context.selected_objects:
         ob.select_set(False)
@@ -95,19 +93,13 @@ def create_object(mesh, name):
 
 class SPREADSHEET_UL_data_fields(bpy.types.UIList):
     def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
-        custom_icon = 'OBJECT_DATAMODE'
-        #item is a DataFieldPropertiesGroup
-        #print(type(item.name))
         if self.layout_type in {'DEFAULT', 'COMPACT'}:
-            #layout.label(text=item.name, icon = custom_icon)
             layout.prop(data=item, property="name", text="")
             layout.prop(data=item, property="dataType", text="")
         elif self.layout_type in {'GRID'}:
             layout.alignment = 'CENTER'
-            #layout.label(text="", icon = custom_icon)
             layout.prop(data=item, property="name", text="")
             layout.prop(data=item, property="dataType", text="")
-
 
 # https://blender.stackexchange.com/questions/16511/how-can-i-store-and-retrieve-a-custom-list-in-a-blend-file
 # https://docs.blender.org/api/master/bpy_types_enum_items/attribute_domain_items.html?highlight=mesh+attributes
@@ -132,6 +124,23 @@ class DataFieldPropertiesGroup(bpy.types.PropertyGroup):
         default='FLOAT',
     ) # type: ignore
 
+
+class SPREADSHEET_UL_joint_names(bpy.types.UIList):
+    def draw_item(self, context, layout, data, item, icon, active_data, active_propname, index):
+        if self.layout_type in {'DEFAULT', 'COMPACT'}:
+            layout.prop(data=item, property="name", text="")
+        elif self.layout_type in {'GRID'}:
+            layout.alignment = 'CENTER'
+            layout.prop(data=item, property="name", text="")
+
+
+class JointNamesGroup(bpy.types.PropertyGroup):
+    name : bpy.props.StringProperty(
+        name="Joint Name",
+        description="Name of joint to import",
+        default="",
+    ) # type: ignore
+
 #todo: add presets
 # https://sinestesia.co/blog/tutorials/using-blenders-presets-in-python/
 
@@ -146,6 +155,11 @@ class ImportSpreadsheetData(bpy.types.Operator, ImportHelper):
 
     # List of operator properties, the attributes will be assigned
     # to the class instance from the operator settings before calling.
+    filter_glob: bpy.props.StringProperty(
+        default="*.json",
+        options={'HIDDEN'},
+        maxlen=255,  # Max internal buffer length, longer would be clamped.
+    ) # type: ignore
 
     data_fields: bpy.props.CollectionProperty(
         type=DataFieldPropertiesGroup,
@@ -167,11 +181,25 @@ class ImportSpreadsheetData(bpy.types.Operator, ImportHelper):
         default="",
         options={'HIDDEN'},
     ) # type: ignore
-    
+
     json_encoding: bpy.props.StringProperty(
         name="Encoding",
         description="Encoding of the JSON File",
         default="utf-8-sig",
+        options={'HIDDEN'},
+    ) # type: ignore
+
+    joint_names: bpy.props.CollectionProperty(
+        type=JointNamesGroup,
+        name="Joint names",
+        description="Name of joints that should be imported",
+        options={'HIDDEN'},
+    ) # type: ignore
+
+    # The index of the selected joint name
+    active_joint_field_index: bpy.props.IntProperty(
+        name="Index of joint_names",
+        default=0,
         options={'HIDDEN'},
     ) # type: ignore
 
@@ -183,10 +211,11 @@ class ImportSpreadsheetData(bpy.types.Operator, ImportHelper):
         if(self.filepath.lower().endswith('.json')):
             report_message, report_type = read_json_data(
                 context,
-                self.filepath,
-                self.array_name,
-                self.data_fields,
-                self.json_encoding,
+                filepath=self.filepath,
+                data_fields=self.data_fields,
+                data_array_name=self.array_name,
+                encoding=self.json_encoding,
+                joint_names=self.joint_names,
             )
 
         self.report({report_type}, report_message)
@@ -200,9 +229,7 @@ class AddDataFieldOperator(bpy.types.Operator):
         sfile = context.space_data
         operator = sfile.active_operator
         item = operator.data_fields.add()
-
         operator.active_data_field_index = len(operator.data_fields) - 1
-        
         return {'FINISHED'}
 
 class RemoveDataFieldOperator(bpy.types.Operator):
@@ -216,6 +243,30 @@ class RemoveDataFieldOperator(bpy.types.Operator):
         operator.data_fields.remove(index)
         operator.active_data_field_index = min(max(0,index - 1), len(operator.data_fields)-1)
         return {'FINISHED'}
+
+class AddJointOperator(bpy.types.Operator):
+    bl_idname = "import.spreadsheet_joint_add"
+    bl_label = "Add joint"
+
+    def execute(self, context):
+        sfile = context.space_data
+        operator = sfile.active_operator
+        item = operator.joint_names.add()
+        operator.active_joint_field_index = len(operator.joint_names) - 1
+        return {'FINISHED'}
+
+class RemoveJointOperator(bpy.types.Operator):
+    bl_idname = "import.spreadsheet_joint_remove"
+    bl_label = "Remove joint"
+
+    def execute(self, context):
+        sfile = context.space_data
+        operator = sfile.active_operator
+        index = operator.active_joint_field_index
+        operator.joint_names.remove(index)
+        operator.active_joint_field_index = min(max(0,index - 1), len(operator.joint_names)-1)
+        return {'FINISHED'}
+
 
 class SPREADSHEET_PT_json_options(bpy.types.Panel):
     bl_space_type = 'FILE_BROWSER'
@@ -276,16 +327,57 @@ class SPREADSHEET_PT_field_names(bpy.types.Panel):
         col = row.column(align=True)
         col.operator(AddDataFieldOperator.bl_idname, icon='ADD', text="")
         col.operator(RemoveDataFieldOperator.bl_idname, icon='REMOVE', text="")
-        
+
+class SPREADSHEET_PT_joint_names(bpy.types.Panel):
+    bl_space_type = 'FILE_BROWSER'
+    bl_region_type = 'TOOL_PROPS'
+    bl_label = "Joint Names"
+    bl_parent_id = "FILE_PT_operator"
+
+    @classmethod
+    def poll(cls, context):
+        sfile = context.space_data
+        operator = sfile.active_operator
+        return operator.bl_idname == "IMPORT_OT_spreadsheet"
+
+    def draw(self, context):
+        sfile = context.space_data
+        operator = sfile.active_operator
+        layout = self.layout
+
+        rows = 2
+        filed_names_exist = bool(len(operator.joint_names) >= 1)
+        if filed_names_exist:
+            rows = 4
+
+        row = layout.row()
+        row.template_list(
+            "SPREADSHEET_UL_joint_names",
+            "",
+            operator,
+            "joint_names",
+            operator,
+            "active_joint_field_index",
+            rows=rows
+        )
+        col = row.column(align=True)
+        col.operator(AddJointOperator.bl_idname, icon='ADD', text="")
+        col.operator(RemoveJointOperator.bl_idname, icon='REMOVE', text="")
+
+
 blender_classes = [
     SPREADSHEET_UL_data_fields,
+    SPREADSHEET_UL_joint_names,
     DataFieldPropertiesGroup,
+    JointNamesGroup,
     ImportSpreadsheetData,
     SPREADSHEET_PT_field_names,
     SPREADSHEET_PT_json_options,
-    # SPREADSHEET_PT_csv_options,
+    SPREADSHEET_PT_joint_names,
     AddDataFieldOperator,
     RemoveDataFieldOperator,
+    AddJointOperator,
+    RemoveJointOperator,
 ]
 
 def menu_func_import(self, context):
