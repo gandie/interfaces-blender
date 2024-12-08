@@ -10,8 +10,15 @@ can be found [here](https://interfaces.7pc.de/).
 
 # Installation
 
-Manual installation for now, proper release zip and official Blender extension
-might follow. Create new folder in your Blender extensions, e.g.:
+## Release zip file
+
+Donwload release zip file from releases page.
+Install via Preferences -> Add-ons - "Install from disk",
+OR drag & drop zip file into blender window to trigger installation.
+
+## Manual installation
+
+Create new folder in your Blender extensions, e.g.:
 
 ```
 C:\Users\lars\AppData\Roaming\Blender Foundation\Blender\4.3\extensions\blender_org\interfaces_import
